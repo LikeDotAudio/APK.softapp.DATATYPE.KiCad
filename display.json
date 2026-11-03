@@ -1,0 +1,9 @@
+{
+  "name": "KiCad Netlist Importer & Exporter",
+  "icon": "⚡",
+  "group": "Pipeline",
+  "subGroup": "Translators & Formats",
+  "stage": "07c",
+  "description": "KiCad Netlist Translator: import and export schematic netlists in KiCad Eeschema s-expression format ((export (version D) ...)); resolves components, footprints, pins, and electrical nets for KiCad PCB layout routing.",
+  "app": "APK:Softapps/DATATYPE/DATATYPE.KiCad/index.html"
+}

@@ -44,7 +44,7 @@ export function netRows(nets) {
   return nets.map((n) => ({ name: n.name, nodes: n.nodes.map((x) => `${x.ref}.${x.pin}`).join(', '), count: n.nodes.length }));
 }
 
-/** state = { components, nets } (mutated in place on load); onLoaded(state, meta) redraws. */
+/** state = { components, nets } (mutated in place on load); onLoaded(state, meta, block) redraws. */
 export function connectKiCadHost(S, state, { onLoaded, notice } = {}) {
   return S.connectHost({
     editor: EDITOR,
@@ -53,7 +53,7 @@ export function connectKiCadHost(S, state, { onLoaded, notice } = {}) {
     notice,
     onLoad: (block, meta) => {
       Object.assign(state, fromBlock(block));
-      if (onLoaded) onLoaded(state, meta);
+      if (onLoaded) onLoaded(state, meta, block);
     },
     onRequest: () => ({ block: toBlock(state), meta: { filename: 'kicad_netlist', title: `KiCad netlist (${state.components.length} parts)` } }),
   });

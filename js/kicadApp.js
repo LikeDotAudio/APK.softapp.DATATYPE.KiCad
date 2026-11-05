@@ -38,8 +38,36 @@ function render() {
   });
 }
 
+if (S) S.describe({
+  name: 'KiCad Netlist Translator',
+  does: 'Edits a schematic netlist (parts and nets) and writes it as a KiCad Eeschema .net file for PCB layout.',
+  inputs: [{ name: 'Netlist block', from: 'the CAD (kicad_netlist block: components[], nets[]); a labelled sample until one arrives', kind: 'block' }],
+  outputs: [
+    { name: 'KiCad netlist', to: 'schematic-export.net download (Download .net File)', kind: 'file' },
+    { name: 'Netlist block', to: 'the CAD drawing (Save & Return), or kicad_netlist.json download when standalone', kind: 'block' },
+  ],
+  controls: [
+    { name: 'Component', how: 'Click ➕ Component to add a row; edit a cell in the Components table; delete a row with its ✕' },
+    { name: 'Download .net File', how: 'Saves the netlist text shown on the right' },
+    { name: 'Save & Return', how: 'Sends the block back to the CAD (or downloads it as .json)' },
+  ],
+  problems: ['bad_input', 'save_failed', 'sdk_missing'],
+});
+
+/* A block that is not a netlist loads as empty — say which field was missing. */
+function checkBlock(block, meta) {
+  const b = block && typeof block === 'object' ? block : null;
+  const missing = ['components', 'nets'].filter((k) => !b || !Array.isArray(b[k]));
+  if (!missing.length || !S) return;
+  S.showProblem('bad_input', {
+    subject: (meta && (meta.blockName || meta.title)) || 'CAD block',
+    detail: `The block has no ${missing.map((k) => `${k}[]`).join(' or ')} field${missing.length > 1 ? 's' : ''}, so ${missing.join(' and ')} loaded empty.`,
+    fix: ['Open this block from a KiCad netlist (kicad_netlist) block in the CAD, not another block type.'],
+  });
+}
+
 const host = S ? connectKiCadHost(S, state, {
-  onLoaded: (st, meta) => { $('block-tag').textContent = meta.blockName || meta.title || 'FROM THE CAD'; render(); },
+  onLoaded: (st, meta, block) => { $('block-tag').textContent = meta.blockName || meta.title || 'FROM THE CAD'; render(); checkBlock(block, meta); },
 }) : null;
 
 function changed() {
@@ -53,6 +81,10 @@ $('btn-add').addEventListener('click', () => {
 });
 
 $('btn-dl').addEventListener('click', () => {
+  if (!$('output').value.trim()) {
+    if (S) S.showProblem('bad_input', { subject: 'schematic-export.net', detail: 'The netlist is empty: there is nothing to download.', fix: ['Add a component with ➕ Component, or open a netlist block from the CAD.'] });
+    return;
+  }
   const blob = new Blob([$('output').value], { type: 'text/plain' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -62,9 +94,15 @@ $('btn-dl').addEventListener('click', () => {
 });
 
 $('btn-save').addEventListener('click', () => {
-  const how = host ? host.save(toBlock(state), { filename: 'kicad_netlist' }) : '';
+  let how = '';
+  try { how = host ? host.save(toBlock(state), { filename: 'kicad_netlist' }) : ''; }
+  catch (e) { S.showProblem('save_failed', { subject: 'kicad_netlist', detail: e && e.message ? e.message : String(e), onRetry: () => $('btn-save').click() }); return; }
+  if (!host) $('block-tag').textContent = 'NOT SAVED: SHARED CODE MISSING';
   if (how) $('block-tag').textContent = how === 'host' ? 'SAVED TO THE CAD' : 'DOWNLOADED .JSON';
 });
 
-if (!T) $('parts-table').textContent = 'vendor/apk-table did not load.';
+if (!T) {
+  if (S) S.showProblem('sdk_missing', { into: $('parts-table'), detail: 'vendor/apk-table/apk-table.js did not load, so the tables cannot draw.', dismissable: false });
+  else $('parts-table').textContent = 'vendor/apk-table and vendor/apk-softapp did not load: reload (Ctrl+Shift+R), or re-vendor them with .apk.scripts/vendor_shared_web.py.';
+}
 render();

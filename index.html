@@ -4,46 +4,50 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KiCad Netlist Translator — APK.audio</title>
+  <link rel="stylesheet" href="./vendor/apk-contracts/apk-tokens.css">
+  <link rel="stylesheet" href="./vendor/apk-table/apk-table.css">
   <style>
     body { font-family: -apple-system, sans-serif; background: #0f1218; color: #e2e8f0; margin: 0; padding: 20px; }
-    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #283348; padding-bottom: 15px; margin-bottom: 20px; }
-    textarea { width: 100%; height: 350px; background: #181d28; color: #38bdf8; font-family: monospace; font-size: 13px; border: 1px solid #2c364a; border-radius: 6px; padding: 12px; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid #283348; padding-bottom: 15px; margin-bottom: 20px; }
+    header h2 { margin: 0; }
+    .pill { font-size: 11px; color: var(--apk-accent); border: 1px solid #283348; border-radius: 10px; padding: 2px 8px; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    h4 { color: #94a3b8; margin: 0 0 8px; }
+    textarea { width: 100%; box-sizing: border-box; height: 420px; background: #181d28; color: #38bdf8; font-family: monospace; font-size: 13px; border: 1px solid #2c364a; border-radius: 6px; padding: 12px; }
     button { background: #0284c7; color: #fff; border: 1px solid #38bdf8; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
+    button.primary { background: var(--apk-accent); color: var(--apk-on-accent, #111); border-color: var(--apk-accent); }
   </style>
 </head>
 <body>
   <header>
-    <h2>⚡ KiCad Netlist Importer & Exporter</h2>
-    <button id="btn-dl">Download .net File</button>
+    <h2>⚡ KiCad Netlist Importer &amp; Exporter</h2>
+    <span class="pill" id="block-tag">SAMPLE NETLIST</span>
+    <div>
+      <button id="btn-add">➕ Component</button>
+      <button id="btn-dl">Download .net File</button>
+      <button id="btn-save" class="primary">💾 Save &amp; Return</button>
+    </div>
   </header>
 
-  <p style="color:#94a3b8; font-size:14px;">Generates native KiCad Eeschema netlist s-expressions for PCB layout integration:</p>
-  <textarea id="output" spellcheck="false"></textarea>
+  <div class="grid">
+    <section>
+      <h4>Components</h4>
+      <div id="parts-table" class="apk-table-host"></div>
+      <h4 style="margin-top: 16px;">Nets</h4>
+      <div id="nets-table" class="apk-table-host"></div>
+    </section>
+    <section>
+      <h4>KiCad Eeschema netlist (s-expressions, for PCB layout)</h4>
+      <textarea id="output" spellcheck="false" readonly></textarea>
+    </section>
+  </div>
 
-  <script type="module">
-    import { exportKiCadNetlist } from './js/kicad.js';
-
-    const sampleComps = [
-      { ref: 'J1', value: 'XLR-F-3PIN', footprint: 'Connector:Neutrik_NC3FAAH', lib: 'Audio', part: 'XLR3' },
-      { ref: 'U1', value: 'THAT1512', footprint: 'Package_SO:SOIC-8', lib: 'Audio', part: 'PREAMP' },
-      { ref: 'J2', value: '1/4-TRS', footprint: 'Connector:Switchcraft_112', lib: 'Audio', part: 'TRS' }
-    ];
-    const sampleNets = [
-      { name: 'MIC_HOT', nodes: [{ ref: 'J1', pin: '2' }, { ref: 'U1', pin: '2' }] },
-      { name: 'MIC_COLD', nodes: [{ ref: 'J1', pin: '3' }, { ref: 'U1', pin: '3' }] },
-      { name: 'GND', nodes: [{ ref: 'J1', pin: '1' }, { ref: 'U1', pin: '4' }, { ref: 'J2', pin: 'S' }] }
-    ];
-
-    const netlist = exportKiCadNetlist(sampleComps, sampleNets);
-    document.getElementById('output').value = netlist;
-
-    document.getElementById('btn-dl').addEventListener('click', () => {
-      const blob = new Blob([document.getElementById('output').value], { type: 'text/plain' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'schematic-export.net';
-      a.click();
-    });
-  </script>
+  <!-- The one softapp client (ROAD-3485): contracts, bus, CAD bridge, table. Classic scripts, before the module. -->
+  <script src="./vendor/apk-contracts/apk-contracts.global.js"></script>
+  <script src="/FrontEnd/shared/apk-bus.js"></script>
+  <script src="./vendor/apk-softapp/apk-softapp.js"></script>
+  <script src="./vendor/apk-table/apk-table.js"></script>
+  <script type="module" src="./js/kicadApp.js"></script>
 </body>
 </html>

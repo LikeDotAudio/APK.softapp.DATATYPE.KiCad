@@ -4,7 +4,8 @@
    them, the block in and out of the CAD (kicadHost.js). */
 
 import { exportKiCadNetlist } from './kicad.js';
-import { connectKiCadHost, sampleNetlist, toBlock, netRows } from './kicadHost.js';
+import { connectKiCadHost, sampleNetlist, toBlock, netRows, fromBlock } from './kicadHost.js';
+import { blockFromNetlist, fetchPartTypes, ifcToNetlist, netlistFromBlock, netlistToIfc } from './netlistIfc.js';
 
 const S = window.APKSoftapp;
 const T = window.APKTable;
@@ -17,7 +18,10 @@ const COMPONENT_COLUMNS = [
   { key: 'footprint', label: 'Footprint', mono: true },
   { key: 'lib', label: 'Lib' },
   { key: 'part', label: 'Part' },
+  { key: 'bimId', label: 'BIM part', mono: true, placeholder: 'maker/model' },
 ];
+/** pid → the BIM part's .ifc type text (or null when the BIM API did not give it), for Save Model */
+const typeCache = new Map();
 
 let parts = null;
 let nets = null;
@@ -28,7 +32,11 @@ function render() {
   if (parts) parts.setRows(state.components);
   else parts = T.create($('parts-table'), {
     id: 'kicad-components', columns: COMPONENT_COLUMNS, rows: state.components, empty: 'No components.',
-    onEdit: (i, key, value) => { state.components[i][key] = value; changed(); },
+    onEdit: (i, key, value) => {
+      if (key === 'bimId' && !String(value).trim()) delete state.components[i].bimId;
+      else state.components[i][key] = key === 'bimId' ? String(value).trim() : value;
+      changed();
+    },
     onDelete: (i) => { state.components.splice(i, 1); changed(); },
   });
   if (nets) nets.setRows(netRows(state.nets));
@@ -41,17 +49,24 @@ function render() {
 if (S) S.describe({
   name: 'KiCad Netlist Translator',
   does: 'Edits a schematic netlist (parts and nets) and writes it as a KiCad Eeschema .net file for PCB layout.',
-  inputs: [{ name: 'Netlist block', from: 'the CAD (kicad_netlist block: components[], nets[]); a labelled sample until one arrives', kind: 'block' }],
+  inputs: [
+    { name: 'Netlist block', from: 'the CAD (kicad_netlist block: components[], nets[]); a labelled sample until one arrives', kind: 'block' },
+    { name: 'Model file', from: '.json or its .ifc twin picked with 📂 Open (APKSoftapp.openModel)', kind: 'file' },
+    { name: 'Part types', from: 'GET /api/bim/parts/<maker>/<model>.ifc: the type of each component that names a BIM part', kind: 'http' },
+  ],
   outputs: [
     { name: 'KiCad netlist', to: 'schematic-export.net download (Download .net File)', kind: 'file' },
     { name: 'Netlist block', to: 'the CAD drawing (Save & Return), or kicad_netlist.json download when standalone', kind: 'block' },
+    { name: 'Model + .ifc twin', to: '💾 Save Model: kicad_netlist.json and kicad_netlist.ifc (IFC4X3_ADD2: components as occurrences typed by their BIM parts, pins as IfcDistributionPort, a net as an IfcDistributionCircuit)', kind: 'file' },
   ],
   controls: [
     { name: 'Component', how: 'Click ➕ Component to add a row; edit a cell in the Components table; delete a row with its ✕' },
     { name: 'Download .net File', how: 'Saves the netlist text shown on the right' },
+    { name: '📂 Open', how: 'Opens a netlist block (.json) or its .ifc twin' },
+    { name: '💾 Save Model', how: 'Writes the block as .json and its .ifc twin, both or neither' },
     { name: 'Save & Return', how: 'Sends the block back to the CAD (or downloads it as .json)' },
   ],
-  problems: ['bad_input', 'save_failed', 'sdk_missing'],
+  problems: ['bad_input', 'save_failed', 'sdk_missing', 'file_unreadable'],
 });
 
 /* A block that is not a netlist loads as empty — say which field was missing. */
@@ -91,6 +106,36 @@ $('btn-dl').addEventListener('click', () => {
   a.download = 'schematic-export.net';
   a.click();
   URL.revokeObjectURL(a.href);
+});
+
+$('btn-open').addEventListener('click', async () => {
+  if (!S) return;
+  const o = await S.openModel({
+    fromIfc: (text) => blockFromNetlist(ifcToNetlist(text)),
+    fromJson: (data) => data,
+  });
+  if (!o.ok) {
+    if (!o.cancelled && o.problem) S.showProblem(o.problem, { fix: ['Open a netlist block saved by this page (.json, kicad_netlist) or its .ifc twin.'] });
+    return;
+  }
+  Object.assign(state, fromBlock(o.model));
+  $('block-tag').textContent = o.name || 'OPENED';
+  checkBlock(o.model, { title: o.name });
+  changed();
+});
+
+$('btn-save-model').addEventListener('click', async () => {
+  if (!S) return;
+  const r = await S.saveModel(state, {
+    name: 'kicad_netlist',
+    toJson: (st) => toBlock(st),
+    toIfc: async (st) => {
+      const n = netlistFromBlock(toBlock(st));
+      return netlistToIfc(n, { types: (await fetchPartTypes(n, typeCache)).types, fileName: 'kicad_netlist', editor: 'DATATYPE.KiCad' });
+    },
+  });
+  if (!r.ok && !r.cancelled && r.problem) S.showProblem(r.problem);
+  else if (r.ok) $('block-tag').textContent = 'SAVED .JSON + .IFC';
 });
 
 $('btn-save').addEventListener('click', () => {

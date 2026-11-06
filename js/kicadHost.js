@@ -2,7 +2,7 @@
 // MIT Licence. Free, for everyone, for ever. Full text in LICENSE at the root.
 /* kicadHost.js — the netlist block in and out of the CAD over
    cad.like.audio/host@1, through the vendored APKSoftapp client (ROAD-3491).
-   Block: { type: 'kicad_netlist', components: [{ref, value, footprint, lib, part}],
+   Block: { type: 'kicad_netlist', components: [{ref, value, footprint, lib, part, bimId?}],
    nets: [{ name, nodes: [{ ref, pin }] }] }. No DOM here: the tests drive it. */
 
 export const EDITOR = 'KiCad Netlist Translator';
@@ -30,7 +30,11 @@ const arr = (v) => (Array.isArray(v) ? v : []);
 export function fromBlock(block) {
   const b = block && typeof block === 'object' ? block : {};
   return {
-    components: arr(b.components).map((c) => ({ ref: String(c.ref ?? ''), value: String(c.value ?? ''), footprint: String(c.footprint ?? ''), lib: String(c.lib ?? ''), part: String(c.part ?? '') })),
+    components: arr(b.components).map((c) => {
+      const o = { ref: String(c.ref ?? ''), value: String(c.value ?? ''), footprint: String(c.footprint ?? ''), lib: String(c.lib ?? ''), part: String(c.part ?? '') };
+      if (c.bimId) o.bimId = String(c.bimId); // the BIM part it is an occurrence of (its .ifc type on Save Model)
+      return o;
+    }),
     nets: arr(b.nets).map((n) => ({ name: String(n.name ?? ''), nodes: arr(n.nodes).map((x) => ({ ref: String(x.ref ?? ''), pin: String(x.pin ?? '') })) })),
   };
 }

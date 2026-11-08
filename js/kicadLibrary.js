@@ -384,36 +384,9 @@ export function keywordsFor(part, description) {
 const charW = TEXT * 0.8; // KiCad stroke font: an average glyph at 1.27 mm
 const ceilGrid = (v) => Math.ceil(v / GRID - 1e-9) * GRID;
 
-/**
- * A BIM part → a KLC symbol model (write it with writeSymbolLib / writeSymdir).
- *   part       apk.bim.part/1 ({id, manufacturer, model, name, description, category, class, ports[]}),
- *              or partFromIfc(text)
- *   library    the symbol library (KLC S1.1: Function_Subfunction_Manufacturer), default from the part
- *   footprint  'Lib:Name' for a fully specified symbol (KLC S5.1), else blank (generic)
- *   datasheet  URL, else the part's own, else '~' (KLC S6.2)
- *   ifcType    the IFC type entity name for APK_IfcType
- */
-export function symbolFromPart(part, { library = null, footprint = '', datasheet = null, ifcType = null, fpFilters = '' } = {}) {
-  const ports = Array.isArray(part.ports) ? part.ports : [];
-  const passiveDevice = refdesFor(part) === 'J';
-  const conversion = ports.some((r) => r.domain === 'power' && (r.side === 'output' || r.side === 'supply'))
-    && ports.some((r) => r.domain === 'power' && r.side === 'input');
-  // pins in the part's own order, numbered 1..N unless the IFC said its PortNumbers (KLC S4.1: unique)
-  const pins = [];
-  const rows = [];
-  ports.forEach((row, i) => {
-    for (const t of terminals(row, i)) {
-      const type = pinTypeFor(row, t.name, passiveDevice);
-      pins.push({ row: i, group: row.group || row.terminal || '', name: pinName(t.name), original: t.name, type, side: sideFor(row, t.name, type, conversion), number: '' });
-    }
-    rows.push(row);
-  });
-  pins.forEach((p, k) => { p.number = String(k + 1); });
-
-  // KLC S4.1: 100 mil for a 1–2 character number, +50 mil per character beyond, never over 300 mil
-  const chars = Math.max(1, ...pins.map((p) => p.number.length));
-  const len = Math.min(7.62, GRID + Math.max(0, chars - 2) * 1.27);
-
+/** One unit's pins laid out the KLC way (S4.2 sides and groups, S4.1 grid, S3.1 centred): pins [{ row, side, name,
+ *  number, type }] → { out: pins with `at`, edgeX, edgeTop, edgeBot } (the body rectangle's half-width and edges). */
+function layoutPins(pins, len, titleChars = 0) {
   // left / right columns: each port group a run, one empty grid row between groups (KLC S4.2)
   const column = (side) => {
     const out = [];
@@ -433,7 +406,7 @@ export function symbolFromPart(part, { library = null, footprint = '', datasheet
   const half = ceilGrid(Math.max(
     (nameW(L) + nameW(R)) / 2 + PIN_NAME_OFFSET * 2 + GRID,
     across ? ((across - 1) * 2 * GRID) / 2 + GRID : 0,
-    (String(part.model || part.name || '').length * charW) / 2,
+    (titleChars * charW) / 2,
     GRID * 2,
   ));
   const pinX = ceilGrid(half + len);         // the connection point on the grid (KLC S4.1)
@@ -454,6 +427,41 @@ export function symbolFromPart(part, { library = null, footprint = '', datasheet
   T.forEach((p, k) => out.push({ ...p, at: [(k - (T.length - 1) / 2) * 2 * GRID, pinTopY, 270] }));
   B.forEach((p, k) => out.push({ ...p, at: [(k - (B.length - 1) / 2) * 2 * GRID, pinBotY, 90] }));
   out.sort((a, b) => Number(a.number) - Number(b.number));
+  return { out, edgeX, edgeTop, edgeBot };
+}
+
+/**
+ * A BIM part → a KLC symbol model (write it with writeSymbolLib / writeSymdir).
+ *   part       apk.bim.part/1 ({id, manufacturer, model, name, description, category, class, ports[]}),
+ *              or partFromIfc(text)
+ *   library    the symbol library (KLC S1.1: Function_Subfunction_Manufacturer), default from the part
+ *   footprint  'Lib:Name' for a fully specified symbol (KLC S5.1), else blank (generic)
+ *   datasheet  URL, else the part's own, else '~' (KLC S6.2)
+ *   ifcType    the IFC type entity name for APK_IfcType
+ *   panel      the part's touch panel (apk.bim.part/1 `panel`, else part.panel): each page one more unit, its controls pins
+ */
+export function symbolFromPart(part, { library = null, footprint = '', datasheet = null, ifcType = null, fpFilters = '', panel = null } = {}) {
+  const ports = Array.isArray(part.ports) ? part.ports : [];
+  const passiveDevice = refdesFor(part) === 'J';
+  const conversion = ports.some((r) => r.domain === 'power' && (r.side === 'output' || r.side === 'supply'))
+    && ports.some((r) => r.domain === 'power' && r.side === 'input');
+  // pins in the part's own order, numbered 1..N unless the IFC said its PortNumbers (KLC S4.1: unique)
+  const pins = [];
+  const rows = [];
+  ports.forEach((row, i) => {
+    for (const t of terminals(row, i)) {
+      const type = pinTypeFor(row, t.name, passiveDevice);
+      pins.push({ row: i, group: row.group || row.terminal || '', name: pinName(t.name), original: t.name, type, side: sideFor(row, t.name, type, conversion), number: '' });
+    }
+    rows.push(row);
+  });
+  pins.forEach((p, k) => { p.number = String(k + 1); });
+
+  // KLC S4.1: 100 mil for a 1–2 character number, +50 mil per character beyond, never over 300 mil
+  const chars = Math.max(1, ...pins.map((p) => p.number.length));
+  const len = Math.min(7.62, GRID + Math.max(0, chars - 2) * 1.27);
+
+  const { out, edgeX, edgeTop, edgeBot } = layoutPins(pins, len, String(part.model || part.name || '').length);
 
   const name = safeName(part.model || part.name || part.id);
   const lib = library || defaultLibrary(part);
@@ -486,20 +494,104 @@ export function symbolFromPart(part, { library = null, footprint = '', datasheet
   ];
   for (const [k, v] of apk) if (v) properties.push(fld(k, v));
 
-  const body = ['rectangle', ['start', -edgeX, edgeTop], ['end', edgeX, edgeBot],
+  const rect = (x, t, b) => ['rectangle', ['start', -x, t], ['end', x, b],
     ['stroke', ['width', BODY_LINE], ['type', 'default']], ['fill', ['type', 'background']]]; // KLC S3.3: black box, filled
+  const pinOf = (unit) => (p) => ({ unit, style: 1, type: p.type, shape: 'line', at: p.at, length: len, hide: false, name: p.name, number: p.number, nameSize: TEXT, numberSize: TEXT, alternates: [] });
+
+  /* THE TOUCH PANEL: each of its pages one more unit of this symbol (the device's I/O is unit A), each control on
+     the page a pin — a command it takes on the left, a readback it gives on the right (KLC S4.2), its block's
+     controls together; numbered on from the device's pins, listed in APK_Ports as control ports. */
+  const pages = panelPages(panel ?? part.panel, { model: part.model, name: part.name, manufacturer: part.manufacturer });
+  const units = [];
+  if (!pages.length) {
+    units.push({ unit: 0, style: 1, name: '', graphics: [rect(edgeX, edgeTop, edgeBot)], pins: [] });
+    units.push({ unit: 1, style: 1, name: '', graphics: [], pins: out.map(pinOf(1)) });
+  } else {
+    // the device's own I/O is unit A when it has any; the pages follow
+    if (pins.length) units.push({ unit: 1, style: 1, name: 'Device', graphics: [rect(edgeX, edgeTop, edgeBot)], pins: out.map(pinOf(1)) });
+    let next = pins.length;
+    pages.forEach((page, k) => {
+      const pp = [];
+      page.blocks.forEach((blk, bi) => blk.controls.forEach((c) => {
+        pp.push({ row: bi, group: `${page.name} › ${blk.name}`, name: pinName(c.name), original: c.name, type: c.side === 'output' ? 'output' : 'input',
+          side: c.side === 'output' ? 'right' : 'left', number: String(++next), control: c });
+      }));
+      if (!pp.length) return;
+      const lay = layoutPins(pp, Math.min(7.62, GRID + Math.max(0, String(next).length - 2) * 1.27), page.name.length);
+      units.push({ unit: units.length + 1, style: 1, name: page.name, graphics: [rect(lay.edgeX, lay.edgeTop, lay.edgeBot)], pins: lay.out.map(pinOf(units.length + 1)), layout: lay, controls: pp });
+    });
+    // one pin length across every unit (KLC S4.1)
+    const longest = Math.max(...units.flatMap((u) => u.pins.map((p) => p.length)));
+    for (const u of units) for (const p of u.pins) p.length = longest;
+  }
+  if (pages.length) {
+    const ports = JSON.parse(portsJson);
+    for (const u of units) for (const c of u.controls || []) {
+      const o = { n: c.number, group: c.group, side: c.side === 'right' ? 'output' : 'input', domain: 'control', control: c.control.key };
+      if (c.original !== c.name) o.name = c.original;
+      if (c.control.command) o.command = c.control.command;
+      ports.push(o);
+    }
+    properties.find((f) => f.name === 'APK_Ports').value = JSON.stringify(ports);
+    for (const u of units) delete u.controls;
+  }
   return {
     name, library: lib, extends: null, power: null,
     pinNames: { offset: PIN_NAME_OFFSET, hide: false }, pinNumbers: { hide: false },
     excludeFromSim: true, inBom: true, onBoard: true, bodyStyles: [], // on_board: KiCad leaves an off-board symbol out of every netlist, and the wiring is the point
     properties,
-    units: [
-      { unit: 0, style: 1, name: '', graphics: [body], pins: [] },
-      { unit: 1, style: 1, name: '', graphics: [], pins: out.map((p) => ({ unit: 1, style: 1, type: p.type, shape: 'line', at: p.at, length: len, hide: false, name: p.name, number: p.number, nameSize: TEXT, numberSize: TEXT, alternates: [] })) },
-    ],
+    units,
     get pins() { return this.units.flatMap((u) => u.pins); },
     dirty: true,
   };
+}
+
+/* A touch panel's controls (the BIM part's `panel`: frames → OcaBin → OcaBlocks → controls). Containers and
+   layout (OcaBlock, OcaBin, OcaFold, OcaSeparator, a bare _Label) are not controls. A control with a `set`
+   command handler is a command the device takes; anything else that shows a value is a readback it gives. */
+const PANEL_LAYOUT = new Set(['OcaSeparator', '_Label', 'OcaSpacer']);
+/* what a hand works (a command, whatever its handler does next) vs what shows a value (a readback) */
+const PANEL_COMMAND = /Actuator|Button|Toggle|Checkbox|DropDown|Knob|Selector|Switch|TextInput|AcquireLoop|LinkGang|Slider|Fader|Spin/i;
+const textOf = (label) => {
+  if (!label) return '';
+  if (typeof label === 'string') return label;
+  if (label.En) return String(label.En);
+  for (const k of ['active', 'inactive']) if (label[k] && label[k].text) return textOf(label[k].text);
+  return '';
+};
+/** The panel as pages: [{ name, blocks: [{ name, controls: [{ key, name, type, side: 'input' | 'output', command }] }] }]. */
+export function panelPages(panel, vars = {}) {
+  // a template's ${model} filled from the part; a ${word} nobody can fill (the bench's resource) dropped with its joiner
+  const fill = (t) => String(t).replace(/\$\{(\w+)\}/g, (m, k) => (vars[k] != null ? String(vars[k]) : '')).replace(/\s*[@·:]\s*$/, '').replace(/^\s*[@·:]\s*/, '').trim();
+  const frames = panel && typeof panel === 'object' ? panel.frames : null;
+  if (!frames || typeof frames !== 'object') return [];
+  const pages = [];
+  for (const [file, frame] of Object.entries(frames)) {
+    const page = { name: String(file).replace(/\.json$/i, '').replace(/_/g, ' '), blocks: [] };
+    const byBlock = new Map();
+    const walk = (node, block) => {
+      if (!node || typeof node !== 'object') return;
+      for (const [key, v] of Object.entries(node)) {
+        if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
+        const t = String(v.type || '');
+        const kids = v.fields || v.blocks;
+        if (t === 'OcaBin') { walk(kids, block); continue; }
+        if (t === 'OcaBlock' || t === 'OcaFold' || (!t && kids)) { walk(kids, block ?? (fill(textOf(v.description) || key) || key)); continue; }
+        if (!t || PANEL_LAYOUT.has(t)) continue;
+        const h = v.komand_handler || {};
+        const md = v.message_details && Object.values(v.message_details).find((m) => m && m.komand_handler);
+        const handler = h.command ? h : (md ? md.komand_handler : {});
+        const command = PANEL_COMMAND.test(t) || (handler && handler.enable !== false && handler.komand_type === 'set');
+        const name = fill(textOf(v.label) || key) || key;
+        const b = block ?? page.name;
+        if (!byBlock.has(b)) { byBlock.set(b, { name: b, controls: [] }); page.blocks.push(byBlock.get(b)); }
+        byBlock.get(b).controls.push({ key, name, type: t, side: command ? 'input' : 'output', ...(handler && handler.command ? { command: String(handler.command) } : {}) });
+      }
+    };
+    walk(frame, null);
+    if (page.blocks.length) pages.push(page);
+  }
+  return pages;
 }
 
 /** KLC S1.1: Function_Subfunction_Manufacturer, from the part's category, class and maker. */
@@ -890,25 +982,65 @@ function embedded(sym, libId, target) {
 }
 
 /**
- * A KiCad schematic sheet: every placed symbol, and each net as a short wire stub and a net label on each of its
- * pins (a label joins pins exactly as a drawn wire does, for every KiCad tool — and a routed matrix is unreadable).
+ * A KiCad schematic sheet: every placed symbol, and each net drawn — a wire stub and a net label (the net's name) on
+ * each of its pins, and its pins joined by WIRES, each leg routed square (across, down, across) in a channel of its
+ * own. A leg is drawn only where no corner or end of it lands on another net's wire or pin (in KiCad that is a
+ * connection: a short); a leg that finds no such channel is left to the labels, which join the net all the same.
  *   symbols    the symbol models placed (lib_id = '<library>:<name>')
- *   instances  [{ libId, ref, at: [x, y] mm on the sheet (y down), rotation, uuidKey? }]
+ *   instances  [{ libId, ref, unit? (1), at: [x, y] mm (y down), rotation, uuidKey?, fields?: {name: value} (hidden unless
+ *              Reference/Value), shown?: {name: value} (visible lines under the Value) }]
  *   nets       [{ name, nodes: [{ ref, pin }] }]  — a net of one pin is skipped
- * → { text, placed, labelled, skipped: [why] }
+ *   wires      false: labels only
+ *   spread     true: a symbol that would overlap one already placed moves down until it is clear
+ *   groups     [{ name, refs: [ref] }]: each drawn as a dashed frame round its members, titled with its name
+ * → { text, placed, labelled, wired, skipped: [why] }
  */
-export function writeSchematic({ title = '', project = '', symbols = [], instances = [], nets = [], target = DEFAULT_TARGET, comment = '' } = {}) {
+export function writeSchematic({ title = '', project = '', symbols = [], instances = [], nets = [], target = DEFAULT_TARGET, comment = '', wires = true, spread = true, groups = [] } = {}) {
   const t = SCH_TARGETS[target] || SCH_TARGETS.kicad9;
   const byId = new Map(resolveExtends(symbols).map((s) => [`${s.library}:${s.name}`, s]));
   const root = stableUuid(`sheet|${project}|${title}`);
   const skipped = [];
   const placed = instances.filter((i) => byId.has(i.libId) || (skipped.push(`${i.ref}: no symbol ${i.libId}`), false));
+  const G = 2.54;
+
+  // where each pin of a net leads, so a symbol's box makes room for its labels
+  const labelLen = new Map(); // ref → longest net name on it
+  for (const net of nets) if ((net.nodes || []).length >= 2) for (const nd of net.nodes) labelLen.set(nd.ref, Math.max(labelLen.get(nd.ref) || 0, String(net.name).length));
+  const unitPins = (i) => { const sym = byId.get(i.libId); const u = i.unit || 1; return sym.pins.filter((p) => p.unit === u || p.unit === 0); };
+  const boxOf = (i, pos) => {
+    const pts = unitPins(i).map((p) => sheetPoint(pos, i.rotation || 0, p.at));
+    pts.push(pos);
+    const reach = G * 2 + (labelLen.get(i.ref) || 0) * 1.0;
+    const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+    return { x1: Math.min(...xs) - reach, x2: Math.max(...xs) + reach, y1: Math.min(...ys) - G * 3, y2: Math.max(...ys) + G * 4 };
+  };
+  const hit = (a, b) => a.x1 < b.x2 && b.x1 < a.x2 && a.y1 < b.y2 && b.y1 < a.y2;
+  const posOf = new Map(placed.map((i) => [i, [snap(i.at[0], G), snap(i.at[1], G)]]));
+  if (spread) {
+    // a device and its other units (its touch panel's pages) move as one: clustered by ref
+    const clusters = new Map();
+    for (const i of placed) { if (!clusters.has(i.ref)) clusters.set(i.ref, []); clusters.get(i.ref).push(i); }
+    const union = (list, dyy) => {
+      const bs = list.map((i) => { const p = posOf.get(i); return boxOf(i, [p[0], p[1] + dyy]); });
+      return { x1: Math.min(...bs.map((b) => b.x1)), x2: Math.max(...bs.map((b) => b.x2)), y1: Math.min(...bs.map((b) => b.y1)), y2: Math.max(...bs.map((b) => b.y2)) };
+    };
+    const done = [];
+    const order = [...clusters.values()].sort((a, b) => a[0].at[1] - b[0].at[1] || a[0].at[0] - b[0].at[0]);
+    for (const list of order) {
+      let dyy = 0, bx = union(list, 0), guard = 0;
+      for (let o = done.find((d) => hit(d, bx)); o && guard++ < 400; o = done.find((d) => hit(d, bx))) {
+        dyy = snap(dyy + (o.y2 - bx.y1) + G, G);
+        bx = union(list, dyy);
+      }
+      for (const i of list) { const p = posOf.get(i); posOf.set(i, [p[0], p[1] + dyy]); }
+      done.push(bx);
+    }
+  }
   // the sheet starts at a margin: shift everything so nothing sits at a negative coordinate
-  const box = placed.flatMap((i) => byId.get(i.libId).pins.map((p) => sheetPoint(i.at, i.rotation || 0, p.at)).concat([i.at]));
-  const minX = Math.min(0, ...box.map((b) => b[0])), minY = Math.min(0, ...box.map((b) => b[1]));
+  const all0 = placed.map((i) => boxOf(i, posOf.get(i)));
   const M = 25.4;
-  const dx = snap(M - minX, 2.54), dy = snap(M - minY, 2.54);
-  const at = (i) => [snap(i.at[0] + dx, 2.54), snap(i.at[1] + dy, 2.54)];
+  const dx = snap(M - Math.min(0, ...all0.map((b) => b.x1)), G), dy = snap(M - Math.min(0, ...all0.map((b) => b.y1)), G);
+  for (const i of placed) { const p = posOf.get(i); posOf.set(i, [p[0] + dx, p[1] + dy]); }
 
   const body = [];
   const used = new Set();
@@ -916,49 +1048,136 @@ export function writeSchematic({ title = '', project = '', symbols = [], instanc
   for (const i of placed) {
     const sym = byId.get(i.libId);
     used.add(i.libId);
-    const pos = at(i);
-    inst.set(i.ref, { i, sym, pos });
+    const pos = posOf.get(i);
+    if (!inst.has(i.ref)) inst.set(i.ref, []);
+    inst.get(i.ref).push({ i, sym, pos });
+    const unit = i.unit || 1;
     const rot = (((Math.round((i.rotation || 0) / 90) * 90) % 360) + 360) % 360;
-    const uid = stableUuid(`symbol|${i.uuidKey ?? i.ref}`);
-    const node = ['symbol', ['lib_id', new Str(i.libId)], ['at', pos[0], pos[1], rot], ['unit', 1],
+    const uid = stableUuid(`symbol|${i.uuidKey ?? i.ref}|${i.unit || 1}`);
+    const node = ['symbol', ['lib_id', new Str(i.libId)], ['at', pos[0], pos[1], rot], ['unit', unit],
       ['exclude_from_sim', sym.excludeFromSim ? 'yes' : 'no'], ['in_bom', sym.inBom === false ? 'no' : 'yes'], ['on_board', sym.onBoard === false ? 'no' : 'yes'], ['dnp', 'no'],
       ['uuid', new Str(uid)]];
+    // this unit's own body (a touch panel page is not the device's size): its reference above it, its name below
+    const own = (() => {
+      for (const u of sym.units.filter((x) => x.unit === unit || x.unit === 0)) for (const g of u.graphics || []) {
+        if (!Array.isArray(g) || g[0] !== 'rectangle') continue;
+        const st = kid(g, 'start'), en = kid(g, 'end');
+        return { x1: Math.min(n(st[1]), n(en[1])), y1: Math.min(n(st[2]), n(en[2])), y2: Math.max(n(st[2]), n(en[2])) };
+      }
+      return null;
+    })();
+    const fieldAt = (f) => {
+      if (own && f.name === 'Reference' && !f.hide) return [own.x1, own.y2 + 1.27, 0];
+      if (own && f.name === 'Value' && !f.hide) return [own.x1, own.y1 - 1.27, 0];
+      return f.at;
+    };
     for (const f of sym.properties) {
       const value = f.name === 'Reference' ? i.ref : (i.fields && f.name in i.fields ? i.fields[f.name] : f.value);
-      const [fx, fy] = sheetPoint(pos, rot, [f.at[0], f.at[1]]);
-      node.push(propertyNode({ ...f, value, at: [fx, fy, f.at[2] || 0] }));
+      const fa = fieldAt(f);
+      const [fx, fy] = sheetPoint(pos, rot, [fa[0], fa[1]]);
+      const justify = own && !f.hide && (f.name === 'Reference' || f.name === 'Value') ? (f.name === 'Value' ? ['left', 'top'] : ['left']) : f.justify;
+      node.push(propertyNode({ ...f, value, justify, at: [fx, fy, fa[2] || 0] }));
     }
     for (const [k, v] of Object.entries(i.fields || {})) {
       if (!sym.properties.some((f) => f.name === k)) node.push(propertyNode({ name: k, value: String(v), at: [pos[0], pos[1], 0], size: TEXT, hide: true, justify: [] }));
     }
-    for (const p of sym.pins) node.push(['pin', new Str(p.number), ['uuid', new Str(stableUuid(`pin|${uid}|${p.number}`))]]);
-    node.push(['instances', ['project', new Str(project), ['path', new Str(`/${root}`), ['reference', new Str(i.ref)], ['unit', 1]]]]);
+    // visible lines under the Value (the device's own words a reader wants on the sheet)
+    const val = sym.properties.find((f) => f.name === 'Value');
+    Object.entries(i.shown || {}).forEach(([k, v], n) => {
+      const base = val ? fieldAt(val) : [0, 0, 0];
+      const [fx, fy] = sheetPoint(pos, rot, [base[0], base[1] - G * (n + 1)]);
+      node.push(propertyNode({ name: k, value: String(v), at: [fx, fy, 0], size: TEXT, hide: false, justify: ['left', 'top'] }));
+    });
+    for (const p of unitPins(i)) node.push(['pin', new Str(p.number), ['uuid', new Str(stableUuid(`pin|${uid}|${p.number}`))]]);
+    node.push(['instances', ['project', new Str(project), ['path', new Str(`/${root}`), ['reference', new Str(i.ref)], ['unit', unit]]]]);
     body.push(forTarget(node, target));
   }
 
-  let labelled = 0;
+  // each net's pins: the pin point, and the stub's far end where its label sits and its wire leaves
+  const netEnds = [];
   for (const net of nets) {
     if ((net.nodes || []).length < 2) continue;
+    const ends = [];
     for (const nd of net.nodes) {
-      const it = inst.get(nd.ref);
-      const pin = it && it.sym.pins.find((p) => p.number === String(nd.pin));
-      if (!pin) { skipped.push(`${net.name}: ${nd.ref} has no pin ${nd.pin}`); continue; }
+      let it = null, pin = null;
+      for (const cand of inst.get(nd.ref) || []) {
+        const u = cand.i.unit || 1;
+        const hitPin = cand.sym.pins.find((p) => p.number === String(nd.pin) && (p.unit === u || p.unit === 0));
+        if (hitPin) { it = cand; pin = hitPin; break; }
+      }
+      if (!pin) { skipped.push(`${net.name}: ${nd.ref} has no pin ${nd.pin} on a placed unit`); continue; }
       const rot = it.i.rotation || 0;
       const [x, y] = sheetPoint(it.pos, rot, pin.at);
-      // outward: away from the body, the pin's own direction turned by the placement, reversed
       const out = ((((pin.at[2] + rot + 180) % 360) + 360) % 360);
       const ux = Math.round(Math.cos((out * Math.PI) / 180)), uy = -Math.round(Math.sin((out * Math.PI) / 180));
-      const end = [x + ux * 2.54, y + uy * 2.54];
-      const key = `${net.name}|${nd.ref}|${nd.pin}`;
-      body.push(['wire', ['pts', ['xy', x, y], ['xy', end[0], end[1]]], ['stroke', ['width', 0], ['type', 'default']], ['uuid', new Str(stableUuid(`wire|${key}`))]]);
-      const spin = { 0: [0, 'left'], 90: [90, 'left'], 180: [180, 'right'], 270: [270, 'right'] }[out];
-      body.push(['label', new Str(net.name), ['at', end[0], end[1], spin[0]], ['effects', ['font', ['size', TEXT, TEXT]], ['justify', spin[1], 'bottom']], ['uuid', new Str(stableUuid(`label|${key}`))]]);
+      ends.push({ key: `${net.name}|${nd.ref}|${nd.pin}`, pin: [x, y], end: [x + ux * G, y + uy * G], out });
+    }
+    if (ends.length) netEnds.push({ net, ends });
+  }
+
+  // what every net already owns: segments and points (pins, stub ends), to keep other nets off them
+  const segs = []; // { n, a:[x,y], b:[x,y] }
+  const pts = [];  // { n, p:[x,y] }
+  const near = (u, v) => Math.abs(u - v) < 1e-3;
+  const onSeg = (p, s) => (near(s.a[0], s.b[0]) && near(p[0], s.a[0]) && p[1] >= Math.min(s.a[1], s.b[1]) - 1e-3 && p[1] <= Math.max(s.a[1], s.b[1]) + 1e-3)
+    || (near(s.a[1], s.b[1]) && near(p[1], s.a[1]) && p[0] >= Math.min(s.a[0], s.b[0]) - 1e-3 && p[0] <= Math.max(s.a[0], s.b[0]) + 1e-3);
+  netEnds.forEach(({ ends }, n) => ends.forEach((e) => { pts.push({ n, p: e.pin }); pts.push({ n, p: e.end }); segs.push({ n, a: e.pin, b: e.end }); }));
+  const clear = (n, legs) => {
+    for (const s of legs) {
+      for (const q of pts) if (q.n !== n && onSeg(q.p, s)) return false;
+      for (const o of segs) if (o.n !== n && (onSeg(s.a, o) || onSeg(s.b, o) || onSeg(o.a, s) || onSeg(o.b, s))) return false;
+    }
+    return true;
+  };
+
+  let labelled = 0, wired = 0, unwired = 0;
+  const wire = (a, b, key) => ['wire', ['pts', ['xy', a[0], a[1]], ['xy', b[0], b[1]]], ['stroke', ['width', 0], ['type', 'default']], ['uuid', new Str(stableUuid(`wire|${key}`))]];
+  netEnds.forEach(({ net, ends }, n) => {
+    for (const e of ends) {
+      body.push(wire(e.pin, e.end, e.key));
+      const spin = { 0: [0, 'left'], 90: [90, 'left'], 180: [180, 'right'], 270: [270, 'right'] }[e.out];
+      body.push(['label', new Str(net.name), ['at', e.end[0], e.end[1], spin[0]], ['effects', ['font', ['size', TEXT, TEXT]], ['justify', spin[1], 'bottom']], ['uuid', new Str(stableUuid(`label|${e.key}`))]]);
       labelled++;
     }
+    if (!wires) return;
+    // a chain left to right: each pin to the next, across, down, across in a channel between them
+    const chain = [...ends].sort((p, q) => p.end[0] - q.end[0] || p.end[1] - q.end[1]);
+    for (let k = 1; k < chain.length; k++) {
+      const A = chain[k - 1].end, B = chain[k].end;
+      const mid = snap((A[0] + B[0]) / 2, G);
+      let legs = null;
+      for (let tries = 0; tries < 41 && !legs; tries++) {
+        const c = mid + (tries % 2 ? 1 : -1) * Math.ceil(tries / 2) * 1.27;
+        const route = [[A, [c, A[1]]], [[c, A[1]], [c, B[1]]], [[c, B[1]], B]]
+          .filter(([u, v]) => !(near(u[0], v[0]) && near(u[1], v[1])))
+          .map(([u, v]) => ({ n, a: u, b: v }));
+        if (clear(n, route)) legs = route;
+      }
+      if (!legs) { unwired++; continue; }
+      legs.forEach((s, j) => { segs.push(s); pts.push({ n, p: s.a }, { n, p: s.b }); body.push(wire(s.a, s.b, `${net.name}|leg|${k}|${j}`)); });
+      wired++;
+    }
+  });
+  if (unwired) skipped.push(`${unwired} wire leg(s) left to the net labels: no channel clear of other nets`);
+
+  // groups: a dashed frame round the members' boxes, the name on its top edge (plain sheet graphics: KiCad 9 and 10)
+  const frames = [];
+  for (const g of groups) {
+    const members = (g.refs || []).flatMap((r) => inst.get(r) || []);
+    if (!members.length) continue;
+    const bx = members.map((m) => boxOf(m.i, m.pos));
+    const f = { x1: snap(Math.min(...bx.map((b) => b.x1)), G), y1: snap(Math.min(...bx.map((b) => b.y1)) - G, G),
+      x2: snap(Math.max(...bx.map((b) => b.x2)), G), y2: snap(Math.max(...bx.map((b) => b.y2)), G) };
+    frames.push([f.x1, f.y1], [f.x2, f.y2]);
+    const gid = stableUuid(`group|${g.name}|${(g.refs || []).join(',')}`);
+    body.push(['rectangle', ['start', f.x1, f.y1], ['end', f.x2, f.y2], ['stroke', ['width', 0], ['type', 'dash']], ['fill', ['type', 'none']], ['uuid', new Str(gid)]]);
+    body.push(['text', new Str(String(g.name)), ['exclude_from_sim', 'no'], ['at', f.x1 + 1.27, f.y1 - 1.27, 0],
+      ['effects', ['font', ['size', 2.54, 2.54], ['bold', 'yes']], ['justify', 'left', 'bottom']], ['uuid', new Str(stableUuid(`grouptext|${gid}`))]]);
   }
-  const all = box.map((b) => [b[0] + dx, b[1] + dy]);
-  const w = Math.max(297, Math.ceil((Math.max(0, ...all.map((b) => b[0])) + 2 * M) / 10) * 10);
-  const h = Math.max(210, Math.ceil((Math.max(0, ...all.map((b) => b[1])) + 2 * M) / 10) * 10);
+
+  const allPts = [...posOf.values(), ...segs.flatMap((q) => [q.a, q.b]), ...frames];
+  const w = Math.max(297, Math.ceil((Math.max(0, ...allPts.map((b) => b[0])) + 2 * M) / 10) * 10);
+  const h = Math.max(210, Math.ceil((Math.max(0, ...allPts.map((b) => b[1])) + 2 * M) / 10) * 10);
   const tb = ['title_block', ['title', new Str(title)]];
   if (comment) tb.push(['comment', 1, new Str(comment)]);
   const top = ['kicad_sch', ['version', t.version], ['generator', new Str(GENERATOR)], ['generator_version', new Str(t.generatorVersion)],
@@ -967,7 +1186,7 @@ export function writeSchematic({ title = '', project = '', symbols = [], instanc
     ...body,
     ['sheet_instances', ['path', new Str('/'), ['page', new Str('1')]]],
     ['embedded_fonts', 'no']];
-  return { text: `${sexpWrite(top)}\n`, placed: placed.length, labelled, skipped };
+  return { text: `${sexpWrite(top)}\n`, placed: placed.length, labelled, wired, skipped };
 }
 
 /** sym-lib-table text for the libraries a project folder carries beside its sheet (${KIPRJMOD}/<lib>.kicad_sym). */

@@ -34,6 +34,13 @@ import { KLC_REFDES, KLC_RULES } from './klcRules.js';
 
 export { KLC_RULES, KLC_REFDES };
 export const KICAD_SYM_VERSION = 20251024; // KiCad 10, as kicad-symbols ships it
+/** What each KiCad writes. KiCad 10 reads a KiCad 9 file; KiCad 9 refuses a KiCad 10 one ("Unable to load library"),
+ *  so a file for people to open is written for KiCad 9 and only the kicad-symbols layout for KiCad 10. */
+export const TARGETS = {
+  kicad9: { version: 20241209, generatorVersion: '9.0' },
+  kicad10: { version: KICAD_SYM_VERSION, generatorVersion: '10.0' },
+};
+export const DEFAULT_TARGET = 'kicad9';
 export const GENERATOR = 'apk_audio';
 export const GRID = 2.54;            // KLC S4.1: 100 mil pin grid
 export const TEXT = 1.27;            // KLC S3.2: 50 mil text
@@ -256,11 +263,44 @@ export function symbolNode(sym, { upstream = false } = {}) {
 }
 
 /** Symbols → one .kicad_sym text (KiCad 10). Base symbols first: KiCad wants a parent before its child. */
-export function writeSymbolLib(symbols, { upstream = false, generator = GENERATOR } = {}) {
+export function writeSymbolLib(symbols, { upstream = false, generator = GENERATOR, target = DEFAULT_TARGET } = {}) {
+  const t = TARGETS[target] || TARGETS[DEFAULT_TARGET];
   const list = [...symbols].sort((a, b) => (a.extends ? 1 : 0) - (b.extends ? 1 : 0));
-  const top = ['kicad_symbol_lib', ['version', KICAD_SYM_VERSION], ['generator', new Str(generator)], ['generator_version', new Str('10.0')],
-    ...list.map((s) => symbolNode(s, { upstream }))];
+  const top = ['kicad_symbol_lib', ['version', t.version], ['generator', new Str(generator)], ['generator_version', new Str(t.generatorVersion)],
+    ...list.map((s) => forTarget(symbolNode(s, { upstream }), target))];
   return `${sexpWrite(top)}\n`;
+}
+
+const KICAD10_ONLY = new Set(['in_pos_files', 'duplicate_pin_numbers_are_jumpers', 'body_styles']);
+/* show_name / do_not_autoplace: KiCad 9 writes a bare flag when set and nothing when not; KiCad 10 always (x yes|no) */
+const FLAGS = new Set(['show_name', 'do_not_autoplace']);
+/** A (symbol …) tree as the target KiCad writes it. KiCad 9: no KiCad 10 tokens, a property's (hide yes) inside its
+ *  effects, (power) bare. KiCad 10: a property's hide beside its effects, as kicad-symbols has it. Never mutates. */
+export function forTarget(node, target = DEFAULT_TARGET) {
+  if (!Array.isArray(node)) return node;
+  const nine = target === 'kicad9';
+  let out = node.map((x) => (Array.isArray(x) ? forTarget(x, target) : x));
+  if (nine) {
+    out = out.filter((x) => !(Array.isArray(x) && (KICAD10_ONLY.has(x[0]) || (FLAGS.has(x[0]) && x.length > 1 && text(x[1]) === 'no'))))
+      .map((x) => (Array.isArray(x) && FLAGS.has(x[0]) ? [x[0]] : x));
+  }
+  if (out[0] === 'power' && nine) return ['power'];
+  if (out[0] === 'property') {
+    const hide = out.find((x) => Array.isArray(x) && x[0] === 'hide');
+    const effIdx = out.findIndex((x) => Array.isArray(x) && x[0] === 'effects');
+    if (nine && hide && effIdx >= 0) {
+      out = out.filter((x) => x !== hide);
+      const e = out.findIndex((x) => Array.isArray(x) && x[0] === 'effects');
+      out[e] = [...out[e].filter((x) => !(Array.isArray(x) && x[0] === 'hide')), ['hide', 'yes']];
+    } else if (!nine && effIdx >= 0) {
+      const eh = out[effIdx].find((x) => Array.isArray(x) && x[0] === 'hide');
+      if (eh && !hide) {
+        out[effIdx] = out[effIdx].filter((x) => x !== eh);
+        out.splice(effIdx, 0, ['hide', 'yes']);
+      }
+    }
+  }
+  return out;
 }
 
 /** The kicad-symbols layout (KiCad 10): one file per symbol in <Library>.kicad_symdir/<Name>.kicad_sym.
@@ -268,7 +308,7 @@ export function writeSymbolLib(symbols, { upstream = false, generator = GENERATO
 export function writeSymdir(library, symbols, { upstream = false } = {}) {
   const lib = safeName(library || 'APK');
   const out = {};
-  for (const s of symbols) out[`${lib}.kicad_symdir/${safeName(s.name)}.kicad_sym`] = writeSymbolLib([s], { upstream });
+  for (const s of symbols) out[`${lib}.kicad_symdir/${safeName(s.name)}.kicad_sym`] = writeSymbolLib([s], { upstream, target: 'kicad10' });
   return out;
 }
 
@@ -283,6 +323,9 @@ export const safeName = (s) => String(s ?? '').trim().replace(/[\s/\\:|*?"<>]+/g
 
 const EARTH = /^(gnd|ground|earth|pe|chassis|shield|v-|vss|vee|0v|com(mon)?)\b|\b(gnd|ground|earth)\b/i;
 const POSITIVE = /^(v\+|vcc|vdd|vin|\+\d|\+v|dc in|ac in|mains|power in)|\b(mains|psu|dc\s*in|ac\s*in|power)\b/i;
+
+/** A pin name KiCad keeps as written: no spaces (KiCad shows them as _). */
+export const pinName = (s) => String(s ?? '').trim().replace(/\s+/g, '_') || '~';
 
 /** KLC S6.1: the reference designator for what the part is. Equipment is a removable sub-assembly (A). */
 export function refdesFor(part) {
@@ -361,7 +404,7 @@ export function symbolFromPart(part, { library = null, footprint = '', datasheet
   ports.forEach((row, i) => {
     for (const t of terminals(row, i)) {
       const type = pinTypeFor(row, t.name, passiveDevice);
-      pins.push({ row: i, group: row.group || row.terminal || '', name: t.name, type, side: sideFor(row, t.name, type, conversion), number: '' });
+      pins.push({ row: i, group: row.group || row.terminal || '', name: pinName(t.name), original: t.name, type, side: sideFor(row, t.name, type, conversion), number: '' });
     }
     rows.push(row);
   });
@@ -422,6 +465,7 @@ export function symbolFromPart(part, { library = null, footprint = '', datasheet
   const portsJson = JSON.stringify(out.map((p) => {
     const r = rows[p.row] || {};
     const o = { n: p.number, group: p.group, side: r.side || '', domain: r.domain || '' };
+    if (p.original !== p.name) o.name = p.original; // KiCad's pin name has no spaces: the part's own name
     if (r.connector) o.connector = r.connector;
     if (r.block) o.block = r.block;
     return o;
@@ -429,7 +473,7 @@ export function symbolFromPart(part, { library = null, footprint = '', datasheet
   const fld = (fname, value, at = [0, 0, 0], hide = true, justify = []) => ({ name: fname, value: String(value ?? ''), at, size: TEXT, hide, justify });
   const properties = [
     fld('Reference', refd, [-edgeX, edgeTop + 1.27, 0], false, ['left']),       // KLC S6.2: visible
-    fld('Value', name, [edgeX, edgeTop + 1.27, 0], false, ['right']),           // KLC S6.2: visible, = the name
+    fld('Value', name, [-edgeX, edgeBot - 1.27, 0], false, ['left', 'top']),     // KLC S6.2: visible, = the name; under the body, clear of top pins
     fld('Footprint', footprint || '', [0, 0, 0], true),                          // KLC S5.1: blank when generic
     fld('Datasheet', datasheet || part.datasheet || part.url || '~', [0, 0, 0], true),
     fld('Description', description, [0, 0, 0], true),
@@ -447,7 +491,7 @@ export function symbolFromPart(part, { library = null, footprint = '', datasheet
   return {
     name, library: lib, extends: null, power: null,
     pinNames: { offset: PIN_NAME_OFFSET, hide: false }, pinNumbers: { hide: false },
-    excludeFromSim: true, inBom: true, onBoard: !!footprint, bodyStyles: [],
+    excludeFromSim: true, inBom: true, onBoard: true, bodyStyles: [], // on_board: KiCad leaves an off-board symbol out of every netlist, and the wiring is the point
     properties,
     units: [
       { unit: 0, style: 1, name: '', graphics: [body], pins: [] },
@@ -479,10 +523,11 @@ export function partFromSymbol(sym) {
     for (const p of pins) {
       const r = byN.get(p.number) || {};
       const prev = ports[ports.length - 1];
-      if (prev && prev.group === (r.group || p.name) && prev.side === r.side && prev.domain === r.domain) {
-        prev.count += 1; prev.labels.push(p.name); continue;
+      const nm = r.name || p.name;
+      if (prev && prev.group === (r.group || nm) && prev.side === r.side && prev.domain === r.domain) {
+        prev.count += 1; prev.labels.push(nm); continue;
       }
-      const row = { group: r.group || p.name, side: r.side || sideOfType(p.type), domain: r.domain || domainOfType(p.type), count: 1, labels: [p.name] };
+      const row = { group: r.group || nm, side: r.side || sideOfType(p.type), domain: r.domain || domainOfType(p.type), count: 1, labels: [nm] };
       if (r.connector) row.connector = r.connector;
       if (r.block) row.block = r.block;
       ports.push(row);
@@ -810,4 +855,122 @@ export function symbolSvg(sym, { unit = 1, scale = 6 } = {}) {
   const x0 = Math.min(...pts.map((q) => q[0])) - pad, x1 = Math.max(...pts.map((q) => q[0])) + pad;
   const y0 = Math.min(...pts.map((q) => q[1])) - pad, y1 = Math.max(...pts.map((q) => q[1])) + pad;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${num(x0)} ${num(y0)} ${num(x1 - x0)} ${num(y1 - y0)}" width="${Math.round((x1 - x0) * scale)}" height="${Math.round((y1 - y0) * scale)}" font-family="sans-serif">${parts.join('')}</svg>`;
+}
+
+/* ------------------------------------------------------------------ a schematic sheet (.kicad_sch) */
+
+export const SCH_TARGETS = { kicad9: { version: 20250114, generatorVersion: '9.0' }, kicad10: { version: 20250114, generatorVersion: '10.0' } };
+
+/** A UUID that is a function of its key: the same drawing writes the same file. */
+export function stableUuid(key) {
+  const h = [0x811c9dc5, 0x01000193, 0x9e3779b9, 0x85ebca6b];
+  const s = String(key);
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    for (let k = 0; k < 4; k++) h[k] = Math.imul(h[k] ^ (c + k * 131), 0x01000193 + k * 2) >>> 0;
+  }
+  const hex = h.map((x) => x.toString(16).padStart(8, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${((parseInt(hex[16], 16) & 3) | 8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+const snap = (v, g = 1.27) => Math.round(v / g) * g;
+/** A symbol-local point (y up) turned by the placement (0/90/180/270, counter-clockwise) onto the sheet (y down). */
+export function sheetPoint(at, rotation, [px, py]) {
+  const r = (((Math.round(rotation / 90) * 90) % 360) + 360) % 360;
+  const c = Math.round(Math.cos((r * Math.PI) / 180)), s = Math.round(Math.sin((r * Math.PI) / 180));
+  const rx = px * c - py * s, ry = px * s + py * c;
+  return [at[0] + rx, at[1] - ry];
+}
+
+/** The symbol as a sheet embeds it: named by its lib_id, derived symbols flattened (KiCad embeds them whole). */
+function embedded(sym, libId, target) {
+  const flat = sym.extends ? { ...sym, extends: null, raw: null, dirty: true } : sym;
+  const node = symbolNode(flat);
+  return forTarget(['symbol', new Str(libId), ...node.slice(2)], target);
+}
+
+/**
+ * A KiCad schematic sheet: every placed symbol, and each net as a short wire stub and a net label on each of its
+ * pins (a label joins pins exactly as a drawn wire does, for every KiCad tool — and a routed matrix is unreadable).
+ *   symbols    the symbol models placed (lib_id = '<library>:<name>')
+ *   instances  [{ libId, ref, at: [x, y] mm on the sheet (y down), rotation, uuidKey? }]
+ *   nets       [{ name, nodes: [{ ref, pin }] }]  — a net of one pin is skipped
+ * → { text, placed, labelled, skipped: [why] }
+ */
+export function writeSchematic({ title = '', project = '', symbols = [], instances = [], nets = [], target = DEFAULT_TARGET, comment = '' } = {}) {
+  const t = SCH_TARGETS[target] || SCH_TARGETS.kicad9;
+  const byId = new Map(resolveExtends(symbols).map((s) => [`${s.library}:${s.name}`, s]));
+  const root = stableUuid(`sheet|${project}|${title}`);
+  const skipped = [];
+  const placed = instances.filter((i) => byId.has(i.libId) || (skipped.push(`${i.ref}: no symbol ${i.libId}`), false));
+  // the sheet starts at a margin: shift everything so nothing sits at a negative coordinate
+  const box = placed.flatMap((i) => byId.get(i.libId).pins.map((p) => sheetPoint(i.at, i.rotation || 0, p.at)).concat([i.at]));
+  const minX = Math.min(0, ...box.map((b) => b[0])), minY = Math.min(0, ...box.map((b) => b[1]));
+  const M = 25.4;
+  const dx = snap(M - minX, 2.54), dy = snap(M - minY, 2.54);
+  const at = (i) => [snap(i.at[0] + dx, 2.54), snap(i.at[1] + dy, 2.54)];
+
+  const body = [];
+  const used = new Set();
+  const inst = new Map();
+  for (const i of placed) {
+    const sym = byId.get(i.libId);
+    used.add(i.libId);
+    const pos = at(i);
+    inst.set(i.ref, { i, sym, pos });
+    const rot = (((Math.round((i.rotation || 0) / 90) * 90) % 360) + 360) % 360;
+    const uid = stableUuid(`symbol|${i.uuidKey ?? i.ref}`);
+    const node = ['symbol', ['lib_id', new Str(i.libId)], ['at', pos[0], pos[1], rot], ['unit', 1],
+      ['exclude_from_sim', sym.excludeFromSim ? 'yes' : 'no'], ['in_bom', sym.inBom === false ? 'no' : 'yes'], ['on_board', sym.onBoard === false ? 'no' : 'yes'], ['dnp', 'no'],
+      ['uuid', new Str(uid)]];
+    for (const f of sym.properties) {
+      const value = f.name === 'Reference' ? i.ref : (i.fields && f.name in i.fields ? i.fields[f.name] : f.value);
+      const [fx, fy] = sheetPoint(pos, rot, [f.at[0], f.at[1]]);
+      node.push(propertyNode({ ...f, value, at: [fx, fy, f.at[2] || 0] }));
+    }
+    for (const [k, v] of Object.entries(i.fields || {})) {
+      if (!sym.properties.some((f) => f.name === k)) node.push(propertyNode({ name: k, value: String(v), at: [pos[0], pos[1], 0], size: TEXT, hide: true, justify: [] }));
+    }
+    for (const p of sym.pins) node.push(['pin', new Str(p.number), ['uuid', new Str(stableUuid(`pin|${uid}|${p.number}`))]]);
+    node.push(['instances', ['project', new Str(project), ['path', new Str(`/${root}`), ['reference', new Str(i.ref)], ['unit', 1]]]]);
+    body.push(forTarget(node, target));
+  }
+
+  let labelled = 0;
+  for (const net of nets) {
+    if ((net.nodes || []).length < 2) continue;
+    for (const nd of net.nodes) {
+      const it = inst.get(nd.ref);
+      const pin = it && it.sym.pins.find((p) => p.number === String(nd.pin));
+      if (!pin) { skipped.push(`${net.name}: ${nd.ref} has no pin ${nd.pin}`); continue; }
+      const rot = it.i.rotation || 0;
+      const [x, y] = sheetPoint(it.pos, rot, pin.at);
+      // outward: away from the body, the pin's own direction turned by the placement, reversed
+      const out = ((((pin.at[2] + rot + 180) % 360) + 360) % 360);
+      const ux = Math.round(Math.cos((out * Math.PI) / 180)), uy = -Math.round(Math.sin((out * Math.PI) / 180));
+      const end = [x + ux * 2.54, y + uy * 2.54];
+      const key = `${net.name}|${nd.ref}|${nd.pin}`;
+      body.push(['wire', ['pts', ['xy', x, y], ['xy', end[0], end[1]]], ['stroke', ['width', 0], ['type', 'default']], ['uuid', new Str(stableUuid(`wire|${key}`))]]);
+      const spin = { 0: [0, 'left'], 90: [90, 'left'], 180: [180, 'right'], 270: [270, 'right'] }[out];
+      body.push(['label', new Str(net.name), ['at', end[0], end[1], spin[0]], ['effects', ['font', ['size', TEXT, TEXT]], ['justify', spin[1], 'bottom']], ['uuid', new Str(stableUuid(`label|${key}`))]]);
+      labelled++;
+    }
+  }
+  const all = box.map((b) => [b[0] + dx, b[1] + dy]);
+  const w = Math.max(297, Math.ceil((Math.max(0, ...all.map((b) => b[0])) + 2 * M) / 10) * 10);
+  const h = Math.max(210, Math.ceil((Math.max(0, ...all.map((b) => b[1])) + 2 * M) / 10) * 10);
+  const tb = ['title_block', ['title', new Str(title)]];
+  if (comment) tb.push(['comment', 1, new Str(comment)]);
+  const top = ['kicad_sch', ['version', t.version], ['generator', new Str(GENERATOR)], ['generator_version', new Str(t.generatorVersion)],
+    ['uuid', new Str(root)], ['paper', new Str('User'), w, h], tb,
+    ['lib_symbols', ...[...used].sort().map((id) => embedded(byId.get(id), id, target))],
+    ...body,
+    ['sheet_instances', ['path', new Str('/'), ['page', new Str('1')]]],
+    ['embedded_fonts', 'no']];
+  return { text: `${sexpWrite(top)}\n`, placed: placed.length, labelled, skipped };
+}
+
+/** sym-lib-table text for the libraries a project folder carries beside its sheet (${KIPRJMOD}/<lib>.kicad_sym). */
+export function projectSymLibTable(libraries) {
+  return `(sym_lib_table\n\t(version 7)\n${[...new Set(libraries)].sort().map((l) => symLibTableRow(l, 'APK.audio BIM symbols', `\${KIPRJMOD}/${l}.kicad_sym`)).join('\n')}\n)\n`;
 }

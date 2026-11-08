@@ -41,7 +41,18 @@ test('a stock kicad-symbols file reads, and writes back as it came', () => {
   assert.equal(s.pins.length, 3);
   assert.equal(s.pinNames.hide, true);
   assert.deepEqual(s.pins.map((p) => p.number), ['1', '2', '3']);
-  assert.equal(norm(writeSymbolLib(lib.symbols, { generator: 'kicad_symbol_editor' })), norm(src));
+  assert.equal(norm(writeSymbolLib(lib.symbols, { generator: 'kicad_symbol_editor', target: 'kicad10' })), norm(src));
+});
+
+test('written for KiCad 9: its version, hide inside effects, no KiCad 10 tokens; it reads back the same', () => {
+  const [s] = readSymbolLib(fx(XLR3), { library: 'Connector_Audio' }).symbols;
+  const nine = writeSymbolLib([s]);
+  assert.match(nine, /\(version 20241209\)/);
+  assert.ok(!/in_pos_files|duplicate_pin_numbers_are_jumpers|show_name no|do_not_autoplace no/.test(nine));
+  const [r] = readSymbolLib(nine, { library: 'Connector_Audio' }).symbols;
+  assert.equal(r.properties.find((p) => p.name === 'Footprint').hide, true);
+  assert.equal(r.properties.find((p) => p.name === 'Reference').hide, false);
+  assert.deepEqual(r.pins.map((p) => [p.number, ...p.at]), s.pins.map((p) => [p.number, ...p.at]));
 });
 
 test('KiCad 6–8 text (bare hide, older version) still reads', () => {
@@ -76,8 +87,8 @@ test('a BIM part becomes a KLC symbol: grid, sides, fields, and KLC has no error
   const pin = (name, n = 0) => s.pins.filter((p) => p.name === name)[n];
   assert.equal(pin('THRU-1').at[2], 180, 'outputs on the right');   // KLC S4.2
   assert.equal(pin('CH-1', 0).at[2], 0, 'inputs on the left');
-  assert.equal(pin('AC MAINS').at[2], 270, 'mains on top');
-  assert.equal(pin('AC MAINS').type, 'power_in');                  // KLC S4.4
+  assert.equal(pin('AC_MAINS').at[2], 270, 'mains on top');
+  assert.equal(pin('AC_MAINS').type, 'power_in');                  // KLC S4.4
   assert.equal(pin('THRU-1').type, 'output');
   const P = (k) => s.properties.find((p) => p.name === k);
   assert.equal(P('Reference').value, 'A');                         // KLC S6.1: a sub-assembly

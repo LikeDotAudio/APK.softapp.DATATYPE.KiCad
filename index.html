@@ -17,6 +17,18 @@
     textarea { width: 100%; box-sizing: border-box; height: 420px; background: #181d28; color: #38bdf8; font-family: monospace; font-size: 13px; border: 1px solid #2c364a; border-radius: 6px; padding: 12px; }
     button { background: #0284c7; color: #fff; border: 1px solid #38bdf8; padding: 8px 16px; border-radius: 4px; cursor: pointer; }
     button.primary { background: var(--apk-accent); color: var(--apk-on-accent, #111); border-color: var(--apk-accent); }
+    .kl { margin-top: 20px; border-top: 1px solid #283348; padding-top: 14px; }
+    .kl-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+    .kl-status { font-size: 12px; color: #94a3b8; margin-bottom: 10px; overflow-wrap: anywhere; }
+    .kl-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; }
+    @media (max-width: 900px) { .kl-grid { grid-template-columns: 1fr; } }
+    .kl-preview { background: #181d28; border: 1px solid #2c364a; border-radius: 6px; min-height: 120px; max-height: 520px; overflow: auto; color: #e2e8f0; padding: 8px; }
+    .kl-preview svg { max-width: 100%; height: auto; }
+    .kl-actions { margin: 8px 0; }
+    .kl-findings { list-style: none; padding: 0; margin: 0; font-size: 12px; max-height: 260px; overflow: auto; }
+    .kl-findings li { padding: 3px 0; border-bottom: 1px solid #1f2737; }
+    .kl-findings a { color: #38bdf8; font-family: monospace; margin-right: 6px; }
+    .kl-error { color: #f87171; } .kl-warning { color: #fbbf24; } .kl-info { color: #94a3b8; }
   </style>
 </head>
 <body>
@@ -44,6 +56,11 @@
       <textarea id="output" spellcheck="false" readonly></textarea>
     </section>
   </div>
+
+  <section class="kl">
+    <h4>KiCad symbol library (KiCad 10 · KiCad Library Conventions)</h4>
+    <div id="library-panel"></div>
+  </section>
 
   <!-- The one softapp client (ROAD-3485): contracts, bus, CAD bridge, table. Classic scripts, before the module. -->
   <script src="./vendor/apk-contracts/apk-contracts.global.js"></script>

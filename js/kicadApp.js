@@ -5,6 +5,7 @@
 
 import { exportKiCadNetlist } from './kicad.js';
 import { connectKiCadHost, sampleNetlist, toBlock, netRows, fromBlock } from './kicadHost.js';
+import { mountLibraryPanel } from './libraryPanel.js';
 import { blockFromNetlist, fetchPartTypes, ifcToNetlist, netlistFromBlock, netlistToIfc } from './netlistIfc.js';
 
 const S = window.APKSoftapp;
@@ -53,10 +54,14 @@ if (S) S.describe({
     { name: 'Netlist block', from: 'the CAD (kicad_netlist block: components[], nets[]); a labelled sample until one arrives', kind: 'block' },
     { name: 'Model file', from: '.json or its .ifc twin picked with 📂 Open (APKSoftapp.openModel)', kind: 'file' },
     { name: 'Part types', from: 'GET /api/bim/parts/<maker>/<model>.ifc: the type of each component that names a BIM part', kind: 'http' },
+    { name: 'BIM part → symbol', from: '📚 From BIM part: the shared library picker, then the part\'s IFC type (its JSON when the IFC has no ports)', kind: 'http' },
+    { name: 'KiCad symbol libraries', from: '📂 .kicad_sym files or 📁 a <Library>.kicad_symdir / kicad-symbols checkout (KiCad 6–10)', kind: 'file' },
   ],
   outputs: [
     { name: 'KiCad netlist', to: 'schematic-export.net download (Download .net File)', kind: 'file' },
     { name: 'Netlist block', to: 'the CAD drawing (Save & Return), or kicad_netlist.json download when standalone', kind: 'block' },
+    { name: 'Symbol library', to: '💾 .kicad_sym: one file per library, KiCad 10, with the APK_ fields that tie each symbol to its BIM part', kind: 'file' },
+    { name: 'kicad-symbols layout', to: '⬆ For kicad-symbols: <Library>.kicad_symdir/<Name>.kicad_sym without APK_ fields, into a folder you pick', kind: 'file' },
     { name: 'Model + .ifc twin', to: '💾 Save Model: kicad_netlist.json and kicad_netlist.ifc (IFC4X3_ADD2: components as occurrences typed by their BIM parts, pins as IfcDistributionPort, a net as an IfcDistributionCircuit)', kind: 'file' },
   ],
   controls: [
@@ -65,8 +70,9 @@ if (S) S.describe({
     { name: '📂 Open', how: 'Opens a netlist block (.json) or its .ifc twin' },
     { name: '💾 Save Model', how: 'Writes the block as .json and its .ifc twin, both or neither' },
     { name: 'Save & Return', how: 'Sends the block back to the CAD (or downloads it as .json)' },
+    { name: 'Symbol library', how: 'Pick a symbol row to see it drawn and its KLC findings (each links to the rule); ➕ Place in netlist adds it as a component' },
   ],
-  problems: ['bad_input', 'save_failed', 'sdk_missing', 'file_unreadable'],
+  problems: ['bad_input', 'save_failed', 'sdk_missing', 'file_unreadable', 'fetch_failed'],
 });
 
 /* A block that is not a netlist loads as empty — say which field was missing. */
@@ -86,8 +92,7 @@ const host = S ? connectKiCadHost(S, state, {
 }) : null;
 
 function changed() {
-  render();
-  if (host) host.changed(toBlock(state));
+    if (host) host.changed(toBlock(state));
 }
 
 $('btn-add').addEventListener('click', () => {
@@ -150,4 +155,17 @@ if (!T) {
   if (S) S.showProblem('sdk_missing', { into: $('parts-table'), detail: 'vendor/apk-table/apk-table.js did not load, so the tables cannot draw.', dismissable: false });
   else $('parts-table').textContent = 'vendor/apk-table and vendor/apk-softapp did not load: reload (Ctrl+Shift+R), or re-vendor them with .apk.scripts/vendor_shared_web.py.';
 }
+
+mountLibraryPanel($('library-panel'), {
+  S, T,
+  onPlace: (comp) => {
+    const prefix = comp.ref.replace(/[0-9?]+$/, '') || 'U';
+    let k = 1;
+    while (state.components.some((c) => c.ref === `${prefix}${k}`)) k++;
+    const row = { ref: `${prefix}${k}`, value: comp.value, footprint: comp.footprint, lib: comp.lib, part: comp.part };
+    if (comp.bimId) row.bimId = comp.bimId;
+    state.components.push(row);
+    changed();
+  },
+});
 render();

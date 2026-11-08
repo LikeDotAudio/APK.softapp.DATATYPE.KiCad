@@ -1,0 +1,98 @@
+{
+ "schema": "apk.bim.part/1",
+ "id": "meyer-sound/09-314-001-01",
+ "manufacturer": "Meyer Sound",
+ "maker": "meyer-sound",
+ "model": "09.314.001.01",
+ "name": "Meyer Sound 09.314.001.01",
+ "description": "Eight-channel IntelligentDC power supply and audio distribution unit for Meyer Sound loudspeakers; North America variant.",
+ "category": "Audio",
+ "class": "Audio",
+ "stage": "seeded",
+ "ports": [
+  {
+   "group": "NETWORK",
+   "block": "Networking-Control",
+   "side": "input",
+   "connector": "RJ45",
+   "domain": "network",
+   "count": 1
+  },
+  {
+   "group": "AUDIO INPUT 1–8",
+   "block": "Audio Analog",
+   "side": "input",
+   "connector": "DSUB-25-F",
+   "domain": "audio",
+   "count": 8,
+   "labels": [
+    "CH-1",
+    "CH-2",
+    "CH-3",
+    "CH-4",
+    "CH-5",
+    "CH-6",
+    "CH-7",
+    "CH-8"
+   ],
+   "connector_as_declared": "DB25S"
+  },
+  {
+   "group": "AUDIO THRU 1–8",
+   "block": "Audio Analog",
+   "side": "output",
+   "connector": "DSUB-25-F",
+   "domain": "audio",
+   "count": 8,
+   "labels": [
+    "THRU-1",
+    "THRU-2",
+    "THRU-3",
+    "THRU-4",
+    "THRU-5",
+    "THRU-6",
+    "THRU-7",
+    "THRU-8"
+   ],
+   "connector_as_declared": "DB25S"
+  },
+  {
+   "group": "LOUDSPEAKER OUTPUTS 1–8",
+   "block": "Audio Analog",
+   "side": "output",
+   "connector": "EUROBLOCK-5",
+   "domain": "audio",
+   "count": 8,
+   "labels": [
+    "CH-1",
+    "CH-2",
+    "CH-3",
+    "CH-4",
+    "CH-5",
+    "CH-6",
+    "CH-7",
+    "CH-8"
+   ],
+   "connector_as_declared": "Phoenix 5-pin"
+  },
+  {
+   "group": "AC MAINS",
+   "block": "Power",
+   "side": "input",
+   "connector": "IEC-C14",
+   "domain": "power",
+   "count": 1,
+   "connector_as_declared": "IEC C14"
+  }
+ ],
+ "sources": [
+  "symbols",
+  "symbols-seed"
+ ],
+ "seeded": {
+  "from": "symbols-seed (AI-enriched 2026-01)",
+  "fields": [
+   "ports"
+  ]
+ }
+}

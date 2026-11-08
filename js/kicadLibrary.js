@@ -93,7 +93,11 @@ export function sexpParse(src) {
 }
 
 const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
-const atom = (v) => (isStr(v) ? `"${esc(v.s)}"` : typeof v === 'number' ? num(v) : String(v));
+/* KiCad reads ${NAME} in any text as a variable (ERC: "Unresolved text variable"); a panel template's ${n} is not
+   one, so it is written {n}. (APK_Ports carries its own: its JSON spells the dollar-brace \u0024{, which KiCad
+   does not see and JSON.parse gives back.) */
+const noVars = (t) => String(t).replace(/\$\{/g, '{');
+const atom = (v) => (isStr(v) ? `"${esc(noVars(v.s))}"` : typeof v === 'number' ? num(v) : String(v));
 /** A number as KiCad writes one: no trailing zeros, no -0, at most 4 decimals. */
 export function num(n) {
   const r = Math.round(Number(n) * 1e4) / 1e4;
@@ -324,6 +328,9 @@ export const safeName = (s) => String(s ?? '').trim().replace(/[\s/\\:|*?"<>]+/g
 const EARTH = /^(gnd|ground|earth|pe|chassis|shield|v-|vss|vee|0v|com(mon)?)\b|\b(gnd|ground|earth)\b/i;
 const POSITIVE = /^(v\+|vcc|vdd|vin|\+\d|\+v|dc in|ac in|mains|power in)|\b(mains|psu|dc\s*in|ac\s*in|power)\b/i;
 
+/** JSON text with no literal ${ (KiCad would read it as a variable): \u0024{ is the same string to JSON.parse. */
+const jsonNoVars = (t) => String(t).replace(/\$\{/g, '\\u0024{');
+
 /** A pin name KiCad keeps as written: no spaces (KiCad shows them as _). */
 export const pinName = (s) => String(s ?? '').trim().replace(/\s+/g, '_') || '~';
 
@@ -470,14 +477,14 @@ export function symbolFromPart(part, { library = null, footprint = '', datasheet
     description = description.replace(new RegExp(String(part.model).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), '').replace(/\s+,/g, ',').trim(); // KLC S6.2: the part name is not repeated
   }
   const refd = refdesFor(part);
-  const portsJson = JSON.stringify(out.map((p) => {
+  const portsJson = jsonNoVars(JSON.stringify(out.map((p) => {
     const r = rows[p.row] || {};
     const o = { n: p.number, group: p.group, side: r.side || '', domain: r.domain || '' };
     if (p.original !== p.name) o.name = p.original; // KiCad's pin name has no spaces: the part's own name
     if (r.connector) o.connector = r.connector;
     if (r.block) o.block = r.block;
     return o;
-  }));
+  })));
   const fld = (fname, value, at = [0, 0, 0], hide = true, justify = []) => ({ name: fname, value: String(value ?? ''), at, size: TEXT, hide, justify });
   const properties = [
     fld('Reference', refd, [-edgeX, edgeTop + 1.27, 0], false, ['left']),       // KLC S6.2: visible
@@ -532,7 +539,7 @@ export function symbolFromPart(part, { library = null, footprint = '', datasheet
       if (c.control.command) o.command = c.control.command;
       ports.push(o);
     }
-    properties.find((f) => f.name === 'APK_Ports').value = JSON.stringify(ports);
+    properties.find((f) => f.name === 'APK_Ports').value = jsonNoVars(JSON.stringify(ports));
     for (const u of units) delete u.controls;
   }
   return {
@@ -1192,4 +1199,43 @@ export function writeSchematic({ title = '', project = '', symbols = [], instanc
 /** sym-lib-table text for the libraries a project folder carries beside its sheet (${KIPRJMOD}/<lib>.kicad_sym). */
 export function projectSymLibTable(libraries) {
   return `(sym_lib_table\n\t(version 7)\n${[...new Set(libraries)].sort().map((l) => symLibTableRow(l, 'APK.audio BIM symbols', `\${KIPRJMOD}/${l}.kicad_sym`)).join('\n')}\n)\n`;
+}
+
+/* ------------------------------------------------------------------ one file for a browser that cannot write a folder */
+
+let CRC = null;
+const crc32 = (bytes) => {
+  if (!CRC) { CRC = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; CRC[n] = c >>> 0; } }
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+/**
+ * {name: text} → a .zip (stored, no compression: every unzip and every OS opens it) as bytes, the files in the order
+ * given. One download is one file: a project opened before its sym-lib-table had landed reads a half-written table
+ * ("Expecting '(' … line 1, offset 1").
+ */
+export function zipFiles(files) {
+  const enc = new TextEncoder();
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  const u16 = (v) => [v & 0xff, (v >>> 8) & 0xff];
+  const u32 = (v) => [v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff];
+  for (const [name, text] of Object.entries(files)) {
+    const data = enc.encode(text), nm = enc.encode(name), crc = crc32(data);
+    const head = [...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nm.length), ...u16(0)];
+    parts.push(Uint8Array.from(head), nm, data);
+    central.push([...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nm.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset)], nm);
+    offset += head.length + nm.length + data.length;
+  }
+  const cd = central.map((c) => (c instanceof Uint8Array ? c : Uint8Array.from(c)));
+  const cdLen = cd.reduce((n, c) => n + c.length, 0);
+  const count = Object.keys(files).length;
+  const end = Uint8Array.from([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(count), ...u16(count), ...u32(cdLen), ...u32(offset), ...u16(0)]);
+  const all = [...parts, ...cd, end];
+  const out = new Uint8Array(all.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const c of all) { out.set(c, at); at += c.length; }
+  return out;
 }
